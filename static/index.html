@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bug Triage Developer Recommender</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero">
+            <div>
+                <h1>Intelligent Bug Assignment System</h1>
+            </div>
+        </header>
+
+        <div class="tab-bar" role="tablist" aria-label="Application sections">
+            <button id="recommendations-tab-button" class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="recommendations-tab-panel" data-tab-target="recommendations-tab-panel">Recommendations</button>
+            <button id="datasets-tab-button" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="datasets-tab-panel" data-tab-target="datasets-tab-panel">Dataset Uploads</button>
+        </div>
+
+        <main>
+            <section id="recommendations-tab-panel" class="tab-panel active" role="tabpanel" aria-labelledby="recommendations-tab-button">
+                <div class="grid">
+                    <section class="panel panel-wide">
+                        <div class="panel-heading">
+                            <h2>Query Recommendations</h2>
+                            <p>Enter a new bug and request the top-k developers.</p>
+                        </div>
+                        <form id="recommend-form">
+                            <label for="bug-title">Bug title</label>
+                            <input id="bug-title" name="bug_title" type="text" placeholder="Search crashes when reopening project" required />
+
+                            <label for="bug-description">Bug description</label>
+                            <textarea id="bug-description" name="bug_description" rows="6" placeholder="Describe the issue, impact, steps, logs, and affected module." required></textarea>
+
+                            <label for="top-k">Top-k developers</label>
+                            <input id="top-k" name="k" type="number" min="1" max="20" value="5" required />
+
+                            <button type="submit">Recommend Developers</button>
+                        </form>
+                    </section>
+
+                    <section class="panel panel-wide">
+                        <div class="panel-heading">
+                            <h2>Ranked Results</h2>
+                            <p>Similarity comes from Milvus search over developer bug-history embeddings.</p>
+                        </div>
+                        <div id="recommend-output" class="results empty">Run a query to see recommendations.</div>
+                    </section>
+                </div>
+            </section>
+
+            <section id="datasets-tab-panel" class="tab-panel hidden" role="tabpanel" aria-labelledby="datasets-tab-button">
+                <div class="grid dataset-grid">
+                    <section class="panel">
+                        <div class="panel-heading">
+                            <h2>Upload Bug Dataset</h2>
+                            <p>Supported formats: JSON, JSONL, CSV</p>
+                        </div>
+                        <div class="dataset-format">
+                            <strong>Required fields</strong>
+                            <p><span>title</span> Short bug title.</p>
+                            <p><span>description</span> Bug details used later for checkpoint training.</p>
+                            <p><span>developer_name</span> Developer label assigned to the bug.</p>
+                        </div>
+                        <form id="bug-dataset-form">
+                            <label for="bug-dataset-file">Bug dataset file</label>
+                            <input id="bug-dataset-file" name="file" type="file" accept=".json,.jsonl,.csv" required />
+                            <button id="bug-dataset-submit-button" type="submit">Upload Bug Dataset</button>
+                        </form>
+                        <pre id="bug-dataset-output" class="output empty">No bug dataset uploaded yet.</pre>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-heading">
+                            <h2>Upload Expertise Dataset</h2>
+                            <p>Supported formats: JSON, JSONL, CSV</p>
+                        </div>
+                        <div class="dataset-format">
+                            <strong>Required fields</strong>
+                            <p><span>developer_name</span> Developer identifier or name.</p>
+                            <p><span>bug_history</span> A single bug-history string or a list of bug-history strings.</p>
+                        </div>
+                        <div id="organization-data-status" class="data-status" aria-live="polite">
+                            <strong>Checking current vector database state...</strong>
+                            <p>Loading collection details.</p>
+                        </div>
+                        <form id="upload-form">
+                            <label for="expertise-file">Developer expertise dataset</label>
+                            <input id="expertise-file" name="file" type="file" accept=".json,.jsonl,.csv" required />
+                            <div class="panel-actions">
+                                <button type="submit">Upload Expertise Dataset</button>
+                                <button id="clear-organization-data-button" class="danger-button" type="button">Clear Organization Data</button>
+                            </div>
+                        </form>
+                        <div id="upload-progress" class="upload-progress hidden" aria-live="polite">
+                            <div class="upload-progress-header">
+                                <strong id="upload-progress-phase">Waiting to upload</strong>
+                                <span id="upload-progress-value">0%</span>
+                            </div>
+                            <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                                <div id="upload-progress-bar" class="progress-fill"></div>
+                            </div>
+                            <p id="upload-progress-message" class="upload-progress-message">Upload a dataset to begin processing.</p>
+                        </div>
+                        <pre id="upload-output" class="output empty">No expertise dataset uploaded yet.</pre>
+                    </section>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div id="confirm-clear-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-clear-title">
+        <div class="modal-card">
+            <h2 id="confirm-clear-title">Delete organization vector data?</h2>
+            <p>
+                This will permanently remove all vectors stored in the current Milvus collection for this organization.
+                You will need to upload expertise data again before running recommendations.
+            </p>
+            <div class="modal-actions">
+                <button id="cancel-clear-button" class="secondary-button" type="button">Cancel</button>
+                <button id="confirm-clear-button" class="danger-button" type="button">Delete Data</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
