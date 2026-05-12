@@ -366,6 +366,8 @@ def _process_bug_dataset_job(
         },
     )
 
+    return
+
     try:
         result = service.upload_expertise(
             records,
