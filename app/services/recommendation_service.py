@@ -4,9 +4,10 @@ from collections.abc import Callable, Iterable
 
 from app.core.config import Settings
 from app.db.milvus import MilvusRepository
+from app.models.schemas import BugDatasetRecord
 from app.models.schemas import ExpertiseRecord
+from app.services.classification_service import ClassificationService
 from app.services.embedding_service import EmbeddingService
-# from app.services.classification_service import ClassificationService
 
 
 class RecommendationService:
@@ -17,25 +18,36 @@ class RecommendationService:
         *,
         settings: Settings,
         embedding_service: EmbeddingService,
-        # classification_service: ClassificationService,
+        classification_service: ClassificationService,
         milvus_repository: MilvusRepository,
     ) -> None:
         self.settings = settings
         self.embedding_service = embedding_service
-        # Fine-tuned classifier integration is disabled for vector-only recommendations.
-        # self.classification_service = classification_service
+        self.classification_service = classification_service
         self.milvus_repository = milvus_repository
+
+    def train_classifier(
+        self,
+        records: list[BugDatasetRecord],
+        source_name: str,
+        progress_callback: Callable[[str, float, str], None] | None = None,
+    ) -> dict[str, object]:
+        return self.classification_service.fine_tune(
+            records,
+            source_name,
+            progress_callback=progress_callback,
+        )
 
     def upload_expertise(
         self,
-        records: list[ExpertiseRecord],
+        records: list[ExpertiseRecord] | list[BugDatasetRecord],
         progress_callback: Callable[[str, float, str], None] | None = None,
     ) -> dict[str, int | str]:
         developer_names: list[str] = []
         original_texts: list[str] = []
 
         for record in records:
-            for history_text in self._expand_history(record.bug_history):
+            for history_text in self._extract_record_texts(record):
                 developer_names.append(record.developer_name)
                 original_texts.append(history_text)
 
@@ -106,13 +118,15 @@ class RecommendationService:
             "remaining_vectors": self.milvus_repository.count(),
         }
 
+    def clear_bug_dataset_model(self) -> dict[str, object]:
+        return self.classification_service.clear_finetuned_checkpoints()
+
     def recommend(self, bug_title: str, bug_description: str, k: int) -> dict[str, object]:
         query_text = self._combine_query_text(bug_title, bug_description)
         query_embedding = self.embedding_service.encode_one(query_text)
         search_limit = min(max(k * self.settings.search_limit_multiplier, k), 100)
         raw_hits = self.milvus_repository.search(query_embedding, limit=search_limit)
-        # classifier_predictions = self.classification_service.predict(query_text, top_k=search_limit)
-        # classifier_map = {item["developer_name"]: float(item["classifier_score"]) for item in classifier_predictions}
+        model_recommendations = self.classification_service.predict(query_text, top_k=k)
 
         deduped: dict[str, dict[str, object]] = {}
         for hit in raw_hits:
@@ -120,21 +134,12 @@ class RecommendationService:
             similarity_score = float(hit["similarity_score"])
             existing = deduped.get(developer_name)
             if existing is None or similarity_score > float(existing["similarity_score"]):
-                final_score = similarity_score
-                # classifier_score = classifier_map.get(developer_name)
-                # if classifier_score is not None:
-                #     final_score = (
-                #         self.settings.hybrid_alpha * similarity_score
-                #         + (1 - self.settings.hybrid_alpha) * classifier_score
-                #     )
-
                 deduped[developer_name] = {
                     "developer_name": developer_name,
                     "similarity_score": similarity_score,
                     "matched_bug_text": hit.get("matched_bug_text"),
                     "vector_id": hit.get("vector_id"),
-                    # "classifier_score": classifier_score,
-                    "final_score": final_score,
+                    "final_score": similarity_score,
                 }
 
         recommendations = sorted(
@@ -146,7 +151,9 @@ class RecommendationService:
         return {
             "query_text": query_text,
             "recommendations": recommendations,
-            # "classifier_predictions": classifier_predictions[:k],
+            "model_recommendations": model_recommendations,
+            "classifier_enabled": self.classification_service.enabled,
+            "active_model_checkpoint": self.classification_service.active_checkpoint_name,
         }
 
     @staticmethod
@@ -165,6 +172,16 @@ class RecommendationService:
             text = item.strip()
             if text:
                 yield text
+
+    @staticmethod
+    def _extract_record_texts(record: ExpertiseRecord | BugDatasetRecord) -> Iterable[str]:
+        if isinstance(record, BugDatasetRecord):
+            combined_text = RecommendationService._combine_query_text(record.title, record.description)
+            if combined_text.strip():
+                yield combined_text
+            return
+
+        yield from RecommendationService._expand_history(record.bug_history)
 
     def _filter_insertable_records(
         self,

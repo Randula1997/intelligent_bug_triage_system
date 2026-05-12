@@ -133,6 +133,7 @@ body {
 }
 
 .panel {
+    min-width: 0;
     padding: 24px;
     animation: rise 420ms ease both;
 }
@@ -177,6 +178,7 @@ input {
     margin: 8px 0 0;
     color: var(--muted);
     line-height: 1.6;
+    overflow-wrap: anywhere;
 }
 
 .dataset-format span {
@@ -290,11 +292,31 @@ button:disabled {
 .data-status p {
     margin: 8px 0 0;
     color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+.status-line {
+    display: grid;
+    gap: 4px;
+}
+
+.status-label {
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--primary);
+}
+
+.status-value {
+    color: var(--ink);
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .data-status.populated {
     border-color: rgba(19, 93, 102, 0.22);
-    background: rgba(224, 239, 234, 0.9);
+    background: rgba(255, 252, 247, 0.78);
 }
 
 .data-status.empty {
@@ -307,6 +329,21 @@ button:disabled {
 .query-text,
 .classifier-block {
     padding: 18px;
+}
+
+.results-section {
+    margin-top: 18px;
+}
+
+.results-section-heading h3 {
+    margin: 0;
+    color: var(--ink);
+}
+
+.results-section-heading p,
+.results-note {
+    margin: 8px 0 0;
+    color: var(--muted);
 }
 
 .upload-progress {
@@ -501,6 +538,10 @@ button:disabled {
     .dataset-format span {
         min-width: 0;
         margin-bottom: 4px;
+    }
+
+    .status-line {
+        gap: 6px;
     }
 
     .page-shell {

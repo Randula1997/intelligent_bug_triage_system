@@ -45,6 +45,19 @@ class BugDatasetUploadResponse(BaseModel):
     required_fields: list[str] = Field(default_factory=lambda: ["title", "description", "developer_name"])
 
 
+class BugDatasetTrainingResult(BaseModel):
+    source_name: str
+    trained_records: int
+    developer_count: int
+    base_checkpoint_path: str
+    output_checkpoint_path: str
+    epochs: int
+    learning_rate: float
+    batch_size: int
+    max_length: int
+    created_at: str
+
+
 class UploadJobStatusResponse(BaseModel):
     job_id: str
     status: str
@@ -55,10 +68,27 @@ class UploadJobStatusResponse(BaseModel):
     error: str | None = None
 
 
+class TrainingJobStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    phase: str
+    progress_percent: float = Field(ge=0, le=100)
+    message: str
+    result: BugDatasetTrainingResult | None = None
+    error: str | None = None
+
+
 class ClearOrganizationDataResponse(BaseModel):
     deleted_vectors: int
     collection_name: str
     remaining_vectors: int
+
+
+class ClearBugDatasetModelResponse(BaseModel):
+    deleted_checkpoints: int
+    deleted_checkpoint_paths: list[str] = Field(default_factory=list)
+    base_checkpoint_path: str
+    active_checkpoint_path: str | None = None
 
 
 class BugQueryRequest(BaseModel):
@@ -72,19 +102,20 @@ class RecommendationItem(BaseModel):
     similarity_score: float
     matched_bug_text: str | None = None
     vector_id: int | None = None
-    # classifier_score: float | None = None
     final_score: float
 
 
-# class ClassifierPrediction(BaseModel):
-#     developer_name: str
-#     classifier_score: float
+class ModelRecommendationItem(BaseModel):
+    developer_name: str
+    model_score: float
 
 
 class BugQueryResponse(BaseModel):
     query_text: str
     recommendations: list[RecommendationItem]
-    # classifier_predictions: list[ClassifierPrediction] = Field(default_factory=list)
+    model_recommendations: list[ModelRecommendationItem] = Field(default_factory=list)
+    classifier_enabled: bool = False
+    active_model_checkpoint: str | None = None
 
 
 class HealthResponse(BaseModel):
@@ -93,6 +124,8 @@ class HealthResponse(BaseModel):
     vector_count: int
     embedding_model_name: str
     classifier_enabled: bool
+    classifier_base_checkpoint: str | None = None
+    classifier_active_checkpoint: str | None = None
     startup_error: str | None = None
 
 

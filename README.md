@@ -5,10 +5,8 @@ This project provides a complete developer recommendation workflow for bug triag
 - FastAPI for the backend API
 - SentenceTransformers for embedding developer bug-history records and incoming bug queries
 - Milvus for vector storage and similarity search
-<!-- - A fine-tuned HuggingFace sequence classification checkpoint for optional hybrid reranking -->
+- A DeBERTa sequence-classification checkpoint that can be fine-tuned on uploaded company bug datasets
 - A static HTML, CSS, and JavaScript frontend served by FastAPI
-
-Training and fine-tuning code are intentionally excluded.
 
 ## Folder Structure
 
@@ -79,7 +77,28 @@ The backend will:
 2. Generate an embedding with the same embedding model.
 3. Search Milvus for similar developer history vectors.
 4. Deduplicate matches by developer.
-<!-- 5. Optionally blend the vector score with the fine-tuned classifier score when the developer label exists in the checkpoint config. -->
+5. If a fine-tuned checkpoint is active, run the same query through that model and return a second developer recommendation list.
+
+### 3. Fine-Tune the Checkpoint with a Bug Dataset
+
+Upload a bug dataset where each record contains:
+
+```json
+{
+  "title": "Crash when reopening workspace",
+  "description": "The application crashes after reopening a saved workspace with pending changes.",
+  "developer_name": "alice@example.com"
+}
+```
+
+The backend will:
+
+1. Parse the uploaded JSON, JSONL, or CSV file.
+2. Use the base checkpoint from `checkpoints/model-checkpoint` as the fine-tuning starting point.
+3. Train a new sequence-classification model on the uploaded company dataset.
+4. Save the new checkpoint under `checkpoints/finetuned-models/<timestamp>-<dataset-name>`.
+5. Keep the original base checkpoint unchanged so it can be reused for a different dataset later.
+6. Activate the newly saved checkpoint for model-based recommendations.
 
 ## Setup
 
@@ -117,6 +136,8 @@ After activation, confirm your shell is using the virtual environment, then inst
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
+
+Torch 2.6.0 or newer is required for bug-dataset fine-tuning when the checkpoint is stored as `pytorch_model.bin`. This project's shipped base checkpoint in `checkpoints/model-checkpoint` currently uses `.bin` weights rather than `safetensors`.
 
 ### 3. Install Docker Desktop and start Milvus
 
@@ -200,7 +221,9 @@ You should see these containers:
 copy .env.example .env
 ```
 
-<!-- Update `.env` so `CHECKPOINT_PATH` points to your HuggingFace fine-tuned checkpoint directory. -->
+The default classifier settings already point to the shipped base checkpoint in `checkpoints/model-checkpoint` and store fine-tuned checkpoints in `checkpoints/finetuned-models`.
+
+Because of CVE-2025-32434, bug-dataset upload and fine-tuning require `torch>=2.6.0` unless the checkpoint being loaded uses `safetensors` files.
 
 If you keep the default Docker Desktop setup, leave `MILVUS_URI=http://127.0.0.1:19530`.
 
@@ -247,6 +270,33 @@ Example response:
 ### `POST /api/expertise/upload/jobs`
 
 Starts an upload job and returns a job ID that can be polled for progress while embeddings are created and vectors are stored.
+
+### `POST /api/bug-dataset/upload`
+
+Starts a fine-tuning job from the base checkpoint in `checkpoints/model-checkpoint`.
+
+Example response:
+
+```json
+{
+  "job_id": "cc4b04a0472945f38e879fa3bb6c3b67",
+  "status": "queued",
+  "phase": "queued",
+  "progress_percent": 0,
+  "message": "Bug dataset received. Waiting to start fine-tuning.",
+  "result": null,
+  "error": null
+}
+```
+
+Poll `GET /api/bug-dataset/upload/jobs/{job_id}` until the job completes. The completed payload includes the saved fine-tuned checkpoint path.
+
+### `POST /api/recommend`
+
+Returns two recommendation sections:
+
+- Vector similarity recommendations from Milvus.
+- Fine-tuned model recommendations from the active checkpoint, when available.
 
 Example response:
 

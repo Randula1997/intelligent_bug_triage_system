@@ -9,7 +9,12 @@ class Settings(BaseSettings):
     app_name: str = "Bug Triage Developer Recommender"
     api_prefix: str = "/api"
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
-    # checkpoint_path: str = Field(default="./checkpoints/developer-classifier")
+    classifier_base_checkpoint_path: str = Field(default="./checkpoints/model-checkpoint")
+    classifier_finetuned_root: str = Field(default="./checkpoints/finetuned-models")
+    classifier_train_epochs: int = Field(default=5, ge=1, le=20)
+    classifier_learning_rate: float = Field(default=3e-5, gt=0)
+    classifier_batch_size: int = Field(default=8, ge=1, le=128)
+    classifier_max_length: int = Field(default=384, ge=32, le=1024)
     milvus_uri: str = Field(default="http://127.0.0.1:19530")
     milvus_token: str | None = None
     milvus_collection_name: str = "developer_expertise"
@@ -25,6 +30,14 @@ class Settings(BaseSettings):
         if self.milvus_uri.endswith(".db"):
             return Path(self.milvus_uri)
         return None
+
+    @property
+    def classifier_base_checkpoint_dir(self) -> Path:
+        return Path(self.classifier_base_checkpoint_path)
+
+    @property
+    def classifier_finetuned_root_dir(self) -> Path:
+        return Path(self.classifier_finetuned_root)
 
 
 @lru_cache(maxsize=1)

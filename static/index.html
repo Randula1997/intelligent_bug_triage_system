@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260512b" />
 </head>
 <body>
     <div class="page-shell">
@@ -47,7 +47,7 @@
                     <section class="panel panel-wide">
                         <div class="panel-heading">
                             <h2>Ranked Results</h2>
-                            <p>Similarity comes from Milvus search over developer bug-history embeddings.</p>
+                            <p>Results show both vector-similarity matches from Milvus and predictions from the active fine-tuned checkpoint.</p>
                         </div>
                         <div id="recommend-output" class="results empty">Run a query to see recommendations.</div>
                     </section>
@@ -59,7 +59,7 @@
                     <section class="panel">
                         <div class="panel-heading">
                             <h2>Upload Bug Dataset</h2>
-                            <p>Supported formats: JSON, JSONL, CSV</p>
+                            <p>Supported formats: JSON, JSONL, CSV. Uploading starts fine-tuning from the base checkpoint and saves a new checkpoint folder.</p>
                         </div>
                         <div class="dataset-format">
                             <strong>Required fields</strong>
@@ -67,11 +67,28 @@
                             <p><span>description</span> Bug details used later for checkpoint training.</p>
                             <p><span>developer_name</span> Developer label assigned to the bug.</p>
                         </div>
+                        <div id="bug-dataset-status" class="data-status" aria-live="polite">
+                            <strong>Checking current checkpoint state...</strong>
+                            <p>Loading fine-tuned model details.</p>
+                        </div>
                         <form id="bug-dataset-form">
                             <label for="bug-dataset-file">Bug dataset file</label>
                             <input id="bug-dataset-file" name="file" type="file" accept=".json,.jsonl,.csv" required />
-                            <button id="bug-dataset-submit-button" type="submit">Upload Bug Dataset</button>
+                            <div class="panel-actions">
+                                <button id="bug-dataset-submit-button" type="submit">Upload Bug Dataset</button>
+                                <button id="clear-bug-dataset-button" class="danger-button" type="button" disabled>Clear Bug Dataset Model</button>
+                            </div>
                         </form>
+                        <div id="bug-dataset-progress" class="upload-progress hidden" aria-live="polite">
+                            <div class="upload-progress-header">
+                                <strong id="bug-dataset-progress-phase">Waiting to train</strong>
+                                <span id="bug-dataset-progress-value">0%</span>
+                            </div>
+                            <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                                <div id="bug-dataset-progress-bar" class="progress-fill"></div>
+                            </div>
+                            <p id="bug-dataset-progress-message" class="upload-progress-message">Upload a bug dataset to start fine-tuning.</p>
+                        </div>
                         <pre id="bug-dataset-output" class="output empty">No bug dataset uploaded yet.</pre>
                     </section>
 
@@ -85,7 +102,7 @@
                             <p><span>developer_name</span> Developer identifier or name.</p>
                             <p><span>bug_history</span> A single bug-history string or a list of bug-history strings.</p>
                         </div>
-                        <div id="organization-data-status" class="data-status" aria-live="polite">
+                        <div id="developer-expertise-status" class="data-status" aria-live="polite">
                             <strong>Checking current vector database state...</strong>
                             <p>Loading collection details.</p>
                         </div>
@@ -94,7 +111,7 @@
                             <input id="expertise-file" name="file" type="file" accept=".json,.jsonl,.csv" required />
                             <div class="panel-actions">
                                 <button type="submit">Upload Expertise Dataset</button>
-                                <button id="clear-organization-data-button" class="danger-button" type="button">Clear Organization Data</button>
+                                <button id="clear-organization-data-button" class="danger-button" type="button" disabled>Clear Developer Expertise Data</button>
                             </div>
                         </form>
                         <div id="upload-progress" class="upload-progress hidden" aria-live="polite">
@@ -116,10 +133,9 @@
 
     <div id="confirm-clear-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-clear-title">
         <div class="modal-card">
-            <h2 id="confirm-clear-title">Delete organization vector data?</h2>
-            <p>
-                This will permanently remove all vectors stored in the current Milvus collection for this organization.
-                You will need to upload expertise data again before running recommendations.
+            <h2 id="confirm-clear-title">Confirm deletion</h2>
+            <p id="confirm-clear-description">
+                Choose an action to delete its related data.
             </p>
             <div class="modal-actions">
                 <button id="cancel-clear-button" class="secondary-button" type="button">Cancel</button>
@@ -128,6 +144,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20260512b"></script>
 </body>
 </html>

@@ -12,12 +12,15 @@ from pydantic import BaseModel, ValidationError
 
 from app.models.schemas import (
     BugDatasetRecord,
+    BugDatasetTrainingResult,
     BugDatasetUploadResponse,
     BugQueryRequest,
     BugQueryResponse,
+    ClearBugDatasetModelResponse,
     ClearOrganizationDataResponse,
     ExpertiseRecord,
     HealthResponse,
+    TrainingJobStatusResponse,
     UploadJobStatusResponse,
     UploadResponse,
 )
@@ -63,6 +66,8 @@ async def health(request: Request) -> HealthResponse:
             vector_count=0,
             embedding_model_name=settings.embedding_model_name,
             classifier_enabled=False,
+            classifier_base_checkpoint=settings.classifier_base_checkpoint_path,
+            classifier_active_checkpoint=None,
             startup_error=getattr(request.app.state, "startup_error", None),
         )
 
@@ -71,8 +76,13 @@ async def health(request: Request) -> HealthResponse:
         collection_name=settings.milvus_collection_name,
         vector_count=service.milvus_repository.count(),
         embedding_model_name=settings.embedding_model_name,
-        classifier_enabled=False,
-        # classifier_enabled=service.classification_service.enabled,
+        classifier_enabled=service.classification_service.has_active_finetuned_checkpoint,
+        classifier_base_checkpoint=settings.classifier_base_checkpoint_path,
+        classifier_active_checkpoint=(
+            str(service.classification_service.active_finetuned_checkpoint_path)
+            if service.classification_service.active_finetuned_checkpoint_path is not None
+            else None
+        ),
         startup_error=None,
     )
 
@@ -127,14 +137,42 @@ async def get_upload_job_status(request: Request, job_id: str) -> UploadJobStatu
     return UploadJobStatusResponse(**_get_upload_job(request, job_id))
 
 
-@router.post("/bug-dataset/upload", response_model=BugDatasetUploadResponse)
-async def upload_bug_dataset(file: UploadFile = File(...)) -> BugDatasetUploadResponse:
+@router.post(
+    "/bug-dataset/upload",
+    response_model=TrainingJobStatusResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def upload_bug_dataset(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+) -> TrainingJobStatusResponse:
     records = await _parse_typed_dataset(file, BugDatasetRecord)
-    return BugDatasetUploadResponse(
-        accepted_records=len(records),
-        developer_count=len({record.developer_name for record in records}),
-        source_name=file.filename or "uploaded_bug_dataset",
+    service = _get_service_or_raise(request)
+    job_id = uuid4().hex
+    source_name = file.filename or "uploaded_bug_dataset"
+
+    _set_upload_job(
+        request,
+        job_id,
+        {
+            "job_id": job_id,
+            "status": "queued",
+            "phase": "queued",
+            "progress_percent": 0.0,
+            "message": "Bug dataset received. Waiting to start fine-tuning.",
+            "result": None,
+            "error": None,
+        },
     )
+
+    background_tasks.add_task(_process_bug_dataset_job, request, job_id, service, records, source_name)
+    return TrainingJobStatusResponse(**_get_upload_job(request, job_id))
+
+
+@router.get("/bug-dataset/upload/jobs/{job_id}", response_model=TrainingJobStatusResponse)
+async def get_bug_dataset_job_status(request: Request, job_id: str) -> TrainingJobStatusResponse:
+    return TrainingJobStatusResponse(**_get_upload_job(request, job_id))
 
 
 @router.post("/recommend", response_model=BugQueryResponse)
@@ -149,6 +187,13 @@ async def clear_organization_data(request: Request) -> ClearOrganizationDataResp
     service = _get_service_or_raise(request)
     result = service.clear_organization_data()
     return ClearOrganizationDataResponse(**result)
+
+
+@router.delete("/bug-dataset/model", response_model=ClearBugDatasetModelResponse)
+async def clear_bug_dataset_model(request: Request) -> ClearBugDatasetModelResponse:
+    service = _get_service_or_raise(request)
+    result = service.clear_bug_dataset_model()
+    return ClearBugDatasetModelResponse(**result)
 
 
 async def _parse_typed_dataset(file: UploadFile, model_type: type[RecordModelT]) -> list[RecordModelT]:
@@ -240,6 +285,83 @@ def _process_upload_job(
             "progress_percent": 1.0,
             "message": "Preparing uploaded expertise data.",
             "result": None,
+            "error": None,
+        },
+    )
+
+
+def _process_bug_dataset_job(
+    request: Request,
+    job_id: str,
+    service,
+    records: list[BugDatasetRecord],
+    source_name: str,
+) -> None:
+    _set_upload_job(
+        request,
+        job_id,
+        {
+            "status": "running",
+            "phase": "preparing",
+            "progress_percent": 1.0,
+            "message": "Preparing bug dataset for classifier fine-tuning.",
+            "result": None,
+            "error": None,
+        },
+    )
+
+    try:
+        result = service.train_classifier(
+            records,
+            source_name,
+            progress_callback=lambda phase, percent, message: _set_upload_job(
+                request,
+                job_id,
+                {
+                    "status": "running",
+                    "phase": phase,
+                    "progress_percent": round(percent, 2),
+                    "message": message,
+                },
+            ),
+        )
+    except Exception as exc:
+        _set_upload_job(
+            request,
+            job_id,
+            {
+                "status": "failed",
+                "phase": "failed",
+                "progress_percent": 100.0,
+                "message": "Bug dataset fine-tuning failed.",
+                "error": str(exc),
+                "result": None,
+            },
+        )
+        return
+
+    typed_result = BugDatasetTrainingResult(
+        source_name=source_name,
+        trained_records=int(result["trained_records"]),
+        developer_count=int(result["developer_count"]),
+        base_checkpoint_path=str(result["base_checkpoint_path"]),
+        output_checkpoint_path=str(result["output_checkpoint_path"]),
+        epochs=int(result["epochs"]),
+        learning_rate=float(result["learning_rate"]),
+        batch_size=int(result["batch_size"]),
+        max_length=int(result["max_length"]),
+        created_at=str(result["created_at"]),
+    )
+
+    _set_upload_job(
+        request,
+        job_id,
+        {
+            "status": "completed",
+            "phase": "completed",
+            "progress_percent": 100.0,
+            "message": "Bug dataset fine-tuning completed successfully.",
+            "result": typed_result.model_dump(),
             "error": None,
         },
     )

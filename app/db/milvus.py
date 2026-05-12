@@ -126,7 +126,7 @@ class MilvusRepository:
                     "Could not store uploaded dataset because record "
                     f"{index} has developer_name length {len(developer_name)}, "
                     f"which exceeds the current Milvus collection limit of {self.developer_name_max_length}. "
-                    "If this collection was created earlier with a smaller schema, use Clear Organization Data "
+                    "If this collection was created earlier with a smaller schema, use Clear Developer Data "
                     "to recreate it with the updated limit, or shorten that developer_name value in the dataset."
                 )
 

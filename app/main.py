@@ -11,9 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import router
 from app.core.config import get_settings
 from app.db.milvus import MilvusRepository
+from app.services.classification_service import ClassificationService
 from app.services.embedding_service import EmbeddingService
 from app.services.recommendation_service import RecommendationService
-# from app.services.classification_service import ClassificationService
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,7 +31,14 @@ async def lifespan(app: FastAPI):
 
     try:
         embedding_service = EmbeddingService(settings.embedding_model_name)
-        # classification_service = ClassificationService(settings.checkpoint_path)
+        classification_service = ClassificationService(
+            base_checkpoint_path=settings.classifier_base_checkpoint_path,
+            finetuned_root_path=settings.classifier_finetuned_root,
+            train_epochs=settings.classifier_train_epochs,
+            learning_rate=settings.classifier_learning_rate,
+            batch_size=settings.classifier_batch_size,
+            max_length=settings.classifier_max_length,
+        )
         milvus_repository = MilvusRepository(
             uri=settings.milvus_uri,
             token=settings.milvus_token,
@@ -43,7 +50,7 @@ async def lifespan(app: FastAPI):
         recommendation_service = RecommendationService(
             settings=settings,
             embedding_service=embedding_service,
-            # classification_service=classification_service,
+            classification_service=classification_service,
             milvus_repository=milvus_repository,
         )
         app.state.recommendation_service = recommendation_service

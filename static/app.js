@@ -4,15 +4,25 @@ const bugDatasetForm = document.getElementById("bug-dataset-form");
 const bugDatasetFileInput = document.getElementById("bug-dataset-file");
 const bugDatasetOutput = document.getElementById("bug-dataset-output");
 const bugDatasetSubmitButton = document.getElementById("bug-dataset-submit-button");
+const clearBugDatasetButton = document.getElementById("clear-bug-dataset-button");
+const bugDatasetProgress = document.getElementById("bug-dataset-progress");
+const bugDatasetProgressBar = document.getElementById("bug-dataset-progress-bar");
+const bugDatasetProgressPhase = document.getElementById("bug-dataset-progress-phase");
+const bugDatasetProgressValue = document.getElementById("bug-dataset-progress-value");
+const bugDatasetProgressMessage = document.getElementById("bug-dataset-progress-message");
+const bugDatasetProgressTrack = bugDatasetProgress.querySelector(".progress-track");
 const uploadForm = document.getElementById("upload-form");
 const recommendForm = document.getElementById("recommend-form");
 const uploadOutput = document.getElementById("upload-output");
 const recommendOutput = document.getElementById("recommend-output");
-const organizationDataStatus = document.getElementById("organization-data-status");
+const bugDatasetStatus = document.getElementById("bug-dataset-status");
+const developerExpertiseStatus = document.getElementById("developer-expertise-status");
 const expertiseFileInput = document.getElementById("expertise-file");
 const uploadSubmitButton = uploadForm.querySelector('button[type="submit"]');
 const clearOrganizationDataButton = document.getElementById("clear-organization-data-button");
 const confirmClearModal = document.getElementById("confirm-clear-modal");
+const confirmClearTitle = document.getElementById("confirm-clear-title");
+const confirmClearDescription = document.getElementById("confirm-clear-description");
 const cancelClearButton = document.getElementById("cancel-clear-button");
 const confirmClearButton = document.getElementById("confirm-clear-button");
 const uploadProgress = document.getElementById("upload-progress");
@@ -29,6 +39,11 @@ const uploadUiState = {
 
 const bugDatasetUiState = {
     isBusy: false,
+    hasCheckpoint: false,
+};
+
+const clearModalState = {
+    action: null,
 };
 
 tabButtons.forEach((button) => {
@@ -49,13 +64,18 @@ bugDatasetForm.addEventListener("submit", async (event) => {
     }
 
     setBugDatasetControlsState(true);
-    renderBugDatasetMessage("Uploading bug dataset for validation...", false);
+    renderBugDatasetProgress(0, "Uploading dataset", "Uploading bug dataset to start fine-tuning.");
+    renderBugDatasetMessage("Starting fine-tuning job...", false);
 
     try {
-        const payload = await uploadBugDataset(file);
+        const job = await createBugDatasetJob(file);
+        const payload = await pollBugDatasetJob(job.job_id);
+        renderBugDatasetProgress(100, "Completed", "Fine-tuned checkpoint saved and activated.");
         renderBugDatasetMessage(JSON.stringify(payload, null, 2), false);
         bugDatasetForm.reset();
+        await refreshOrganizationDataState();
     } catch (error) {
+        renderBugDatasetProgress(100, "Failed", error.message, true);
         renderBugDatasetMessage(error.message, true);
     } finally {
         setBugDatasetControlsState(false);
@@ -121,8 +141,24 @@ recommendForm.addEventListener("submit", async (event) => {
     }
 });
 
+clearBugDatasetButton.addEventListener("click", () => {
+    openClearModal({
+        action: "bug-dataset-model",
+        title: "Delete fine-tuned bug dataset model?",
+        description:
+            "This will permanently remove the active fine-tuned checkpoint created from uploaded bug data. The original base checkpoint will not be changed.",
+        confirmLabel: "Delete Model",
+    });
+});
+
 clearOrganizationDataButton.addEventListener("click", () => {
-    confirmClearModal.classList.remove("hidden");
+    openClearModal({
+        action: "developer-expertise-data",
+        title: "Delete developer expertise data?",
+        description:
+            "This will permanently remove all vectors stored in the current Milvus collection for developer expertise data. You will need to upload expertise data again before running recommendations.",
+        confirmLabel: "Delete Data",
+    });
 });
 
 cancelClearButton.addEventListener("click", closeClearModal);
@@ -135,25 +171,22 @@ confirmClearModal.addEventListener("click", (event) => {
 
 confirmClearButton.addEventListener("click", async () => {
     setClearButtonState(true);
-    renderUploadMessage("Deleting organization vector data...", false);
-
     try {
-        const response = await fetch("/api/organization-data", {
-            method: "DELETE",
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-            throw new Error(payload.detail || "Failed to delete organization data.");
+        if (clearModalState.action === "bug-dataset-model") {
+            await clearBugDatasetModel();
+        } else if (clearModalState.action === "developer-expertise-data") {
+            await clearDeveloperExpertiseData();
+        } else {
+            closeClearModal();
+            return;
         }
-
         closeClearModal();
-        renderUploadMessage(JSON.stringify(payload, null, 2), false);
-        recommendOutput.className = "results empty";
-        recommendOutput.innerHTML = "<p>Organization data cleared. Upload expertise data to generate new recommendations.</p>";
-        uploadProgress.classList.add("hidden");
-        await refreshOrganizationDataState();
     } catch (error) {
-        renderUploadMessage(error.message, true);
+        if (clearModalState.action === "bug-dataset-model") {
+            renderBugDatasetMessage(error.message, true);
+        } else {
+            renderUploadMessage(error.message, true);
+        }
     } finally {
         setClearButtonState(false);
     }
@@ -189,18 +222,22 @@ async function refreshOrganizationDataState() {
         const payload = await response.json();
 
         if (!response.ok) {
-            throw new Error(payload.detail || "Could not read current vector database state.");
+            throw new Error(payload.detail || "Could not read current dataset and checkpoint state.");
         }
 
         const vectorCount = Number(payload.vector_count || 0);
         const hasData = vectorCount > 0;
+        const hasCheckpoint = Boolean(payload.classifier_enabled);
         uploadUiState.hasData = hasData;
+        bugDatasetUiState.hasCheckpoint = hasCheckpoint;
         syncUploadControls();
-        renderOrganizationDataStatus(payload, hasData);
+        syncBugDatasetControls();
+        renderBugDatasetStatus(payload);
+        renderDeveloperExpertiseStatus(payload, hasData);
 
         if (hasData) {
             renderUploadMessage(
-                `Current collection ${payload.collection_name} already contains ${vectorCount} vectors. Clear organization data before uploading a new dataset.`,
+                `Current collection ${payload.collection_name} already contains ${vectorCount} vectors. Clear developer expertise data before uploading a new dataset.`,
                 false,
             );
             return;
@@ -209,29 +246,66 @@ async function refreshOrganizationDataState() {
         renderUploadMessage("No dataset uploaded yet.", false);
     } catch (error) {
         uploadUiState.hasData = false;
+        bugDatasetUiState.hasCheckpoint = false;
         syncUploadControls();
-        renderOrganizationDataStatus(null, false, error.message || "Could not read current vector database state.");
+        syncBugDatasetControls();
+        renderBugDatasetStatus(null, error.message || "Could not read current dataset and checkpoint state.");
+        renderDeveloperExpertiseStatus(null, false, error.message || "Could not read current dataset and checkpoint state.");
     }
 }
 
-function renderOrganizationDataStatus(payload, hasData, errorMessage = "") {
+function renderBugDatasetStatus(payload, errorMessage = "") {
     if (errorMessage) {
-        organizationDataStatus.className = "data-status error";
-        organizationDataStatus.innerHTML = `
+        bugDatasetStatus.className = "data-status error";
+        bugDatasetStatus.innerHTML = `
+            <strong>Current checkpoint state is unavailable.</strong>
+            <p class="status-line"><span class="status-value">${escapeHtml(errorMessage)}</span></p>
+        `;
+        return;
+    }
+
+    const classifierEnabled = Boolean(payload.classifier_enabled);
+    const classifierBaseCheckpoint = payload.classifier_base_checkpoint || "Not configured";
+    const classifierActiveCheckpoint = payload.classifier_active_checkpoint || "No fine-tuned checkpoint active";
+    bugDatasetStatus.className = classifierEnabled ? "data-status populated" : "data-status empty";
+    bugDatasetStatus.innerHTML = `
+        <strong>${classifierEnabled ? "Fine-tuned checkpoint is active" : "No fine-tuned checkpoint active"}</strong>
+        <p class="status-line"><span class="status-label">Base checkpoint</span><span class="status-value">${escapeHtml(classifierBaseCheckpoint)}</span></p>
+        <p class="status-line"><span class="status-label">Active fine-tuned checkpoint</span><span class="status-value">${escapeHtml(classifierActiveCheckpoint)}</span></p>
+        <p class="status-line"><span class="status-label">Fine-tuned model available</span><span class="status-value">${classifierEnabled ? "Yes" : "No"}</span></p>
+    `;
+}
+
+function renderDeveloperExpertiseStatus(payload, hasData, errorMessage = "") {
+    if (errorMessage) {
+        developerExpertiseStatus.className = "data-status error";
+        developerExpertiseStatus.innerHTML = `
             <strong>Current vector database state is unavailable.</strong>
-            <p>${escapeHtml(errorMessage)}</p>
+            <p class="status-line"><span class="status-value">${escapeHtml(errorMessage)}</span></p>
         `;
         return;
     }
 
     const vectorCount = Number(payload.vector_count || 0);
-    organizationDataStatus.className = hasData ? "data-status populated" : "data-status empty";
-    organizationDataStatus.innerHTML = `
+    developerExpertiseStatus.className = hasData ? "data-status populated" : "data-status empty";
+    developerExpertiseStatus.innerHTML = `
         <strong>${hasData ? "Organization data is loaded" : "Vector database is empty"}</strong>
-        <p>Collection: ${escapeHtml(payload.collection_name)}</p>
-        <p>Stored vectors: ${vectorCount}</p>
-        <p>Embedding model: ${escapeHtml(payload.embedding_model_name)}</p>
+        <p class="status-line"><span class="status-label">Embedding model</span><span class="status-value">${escapeHtml(payload.embedding_model_name)}</span></p>
+        <p class="status-line"><span class="status-label">Developer expertise collection</span><span class="status-value">${escapeHtml(payload.collection_name)}</span></p>
+        <p class="status-line"><span class="status-label">Stored expertise vectors</span><span class="status-value">${vectorCount}</span></p>
     `;
+}
+
+function renderBugDatasetProgress(percent, phase, message, isError = false) {
+    const safePercent = Math.max(0, Math.min(100, percent));
+
+    bugDatasetProgress.classList.remove("hidden");
+    bugDatasetProgress.classList.toggle("error", isError);
+    bugDatasetProgressBar.style.width = `${safePercent}%`;
+    bugDatasetProgressPhase.textContent = phase;
+    bugDatasetProgressValue.textContent = `${Math.round(safePercent)}%`;
+    bugDatasetProgressMessage.textContent = message;
+    bugDatasetProgressTrack.setAttribute("aria-valuenow", String(Math.round(safePercent)));
 }
 
 function renderUploadProgress(percent, phase, message, isError = false) {
@@ -253,8 +327,13 @@ function setUploadControlsState(isBusy) {
 
 function setBugDatasetControlsState(isBusy) {
     bugDatasetUiState.isBusy = isBusy;
-    bugDatasetSubmitButton.disabled = isBusy;
-    bugDatasetFileInput.disabled = isBusy;
+    syncBugDatasetControls();
+}
+
+function syncBugDatasetControls() {
+    bugDatasetSubmitButton.disabled = bugDatasetUiState.isBusy || bugDatasetUiState.hasCheckpoint;
+    bugDatasetFileInput.disabled = bugDatasetUiState.isBusy || bugDatasetUiState.hasCheckpoint;
+    clearBugDatasetButton.disabled = bugDatasetUiState.isBusy || !bugDatasetUiState.hasCheckpoint;
 }
 
 function syncUploadControls() {
@@ -263,21 +342,75 @@ function syncUploadControls() {
     clearOrganizationDataButton.disabled = uploadUiState.isBusy || !uploadUiState.hasData;
 }
 
-async function uploadBugDataset(file) {
-    const formData = new FormData();
-    formData.append("file", file);
+function createBugDatasetJob(file) {
+    return new Promise((resolve, reject) => {
+        const formData = new FormData();
+        formData.append("file", file);
 
-    const response = await fetch("/api/bug-dataset/upload", {
-        method: "POST",
-        body: formData,
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/bug-dataset/upload");
+
+        xhr.upload.addEventListener("progress", (event) => {
+            if (!event.lengthComputable) {
+                return;
+            }
+
+            const uploadPercent = (event.loaded / event.total) * 20;
+            renderBugDatasetProgress(
+                uploadPercent,
+                "Uploading dataset",
+                `Uploaded ${Math.round((event.loaded / event.total) * 100)}% of the bug dataset file.`,
+            );
+        });
+
+        xhr.addEventListener("load", () => {
+            let payload = {};
+            try {
+                payload = JSON.parse(xhr.responseText || "{}");
+            } catch {
+                reject(new Error("Bug dataset upload failed with an invalid server response."));
+                return;
+            }
+
+            if (xhr.status < 200 || xhr.status >= 300) {
+                reject(new Error(payload.detail || payload.error || "Bug dataset upload failed."));
+                return;
+            }
+
+            renderBugDatasetProgress(25, "Upload complete", "Bug dataset received. Fine-tuning the checkpoint.");
+            resolve(payload);
+        });
+
+        xhr.addEventListener("error", () => {
+            reject(new Error("Bug dataset request failed before it reached the server."));
+        });
+
+        xhr.send(formData);
     });
-    const payload = await response.json();
+}
 
-    if (!response.ok) {
-        throw new Error(payload.detail || "Bug dataset upload failed.");
+async function pollBugDatasetJob(jobId) {
+    while (true) {
+        const response = await fetch(`/api/bug-dataset/upload/jobs/${jobId}`);
+        const payload = await response.json();
+
+        if (!response.ok) {
+            throw new Error(payload.detail || "Could not read bug dataset training progress.");
+        }
+
+        const overallPercent = 25 + (payload.progress_percent * 0.75);
+        renderBugDatasetProgress(overallPercent, toTitleCase(payload.phase), payload.message, payload.status === "failed");
+
+        if (payload.status === "completed") {
+            return payload.result;
+        }
+
+        if (payload.status === "failed") {
+            throw new Error(payload.error || payload.message || "Bug dataset fine-tuning failed.");
+        }
+
+        await delay(700);
     }
-
-    return payload;
 }
 
 function createUploadJob(file) {
@@ -359,21 +492,67 @@ function toTitleCase(value) {
 
 function closeClearModal() {
     confirmClearModal.classList.add("hidden");
+    clearModalState.action = null;
 }
 
 function setClearButtonState(isBusy) {
     confirmClearButton.disabled = isBusy;
     cancelClearButton.disabled = isBusy;
-    clearOrganizationDataButton.disabled = isBusy;
+    clearOrganizationDataButton.disabled = isBusy || uploadUiState.isBusy || !uploadUiState.hasData;
+    clearBugDatasetButton.disabled = isBusy || bugDatasetUiState.isBusy || !bugDatasetUiState.hasCheckpoint;
+}
+
+function openClearModal({ action, title, description, confirmLabel }) {
+    clearModalState.action = action;
+    confirmClearTitle.textContent = title;
+    confirmClearDescription.textContent = description;
+    confirmClearButton.textContent = confirmLabel;
+    confirmClearModal.classList.remove("hidden");
+}
+
+async function clearDeveloperExpertiseData() {
+    renderUploadMessage("Deleting developer expertise data...", false);
+
+    const response = await fetch("/api/organization-data", {
+        method: "DELETE",
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+        throw new Error(payload.detail || "Failed to delete developer expertise data.");
+    }
+
+    renderUploadMessage(JSON.stringify(payload, null, 2), false);
+    recommendOutput.className = "results empty";
+    recommendOutput.innerHTML = "<p>Developer expertise data cleared. Upload expertise data to generate new recommendations.</p>";
+    uploadProgress.classList.add("hidden");
+    await refreshOrganizationDataState();
+}
+
+async function clearBugDatasetModel() {
+    renderBugDatasetMessage("Deleting fine-tuned bug dataset model...", false);
+
+    const response = await fetch("/api/bug-dataset/model", {
+        method: "DELETE",
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+        throw new Error(payload.detail || "Failed to delete the fine-tuned bug dataset model.");
+    }
+
+    renderBugDatasetMessage(JSON.stringify(payload, null, 2), false);
+    bugDatasetProgress.classList.add("hidden");
+    await refreshOrganizationDataState();
 }
 
 function renderRecommendations(data) {
     const recommendations = data.recommendations || [];
-    // const classifier = data.classifier_predictions || [];
+    const modelRecommendations = data.model_recommendations || [];
+    const classifierEnabled = Boolean(data.classifier_enabled);
+    const activeCheckpoint = data.active_model_checkpoint || "No fine-tuned checkpoint active";
 
-    if (!recommendations.length) {
+    if (!recommendations.length && !modelRecommendations.length) {
         recommendOutput.className = "results empty";
-        recommendOutput.innerHTML = "<p>No recommendations found. Upload bug and developer expertise data first.</p>";
+        recommendOutput.innerHTML = "<p>No recommendations found. Upload expertise data and fine-tune a bug dataset first.</p>";
         return;
     }
 
@@ -392,16 +571,38 @@ function renderRecommendations(data) {
         </article>
     `).join("");
 
-    // const classifierBlock = classifier.length
-    //     ? `
-    //         <section class="classifier-block">
-    //             <h3>Classifier top labels</h3>
-    //             <ul>
-    //                 ${classifier.map((item) => `<li>${escapeHtml(item.developer_name)} <span>${Number(item.classifier_score).toFixed(4)}</span></li>`).join("")}
-    //             </ul>
-    //         </section>
-    //     `
-    //     : "";
+    const vectorBlock = `
+        <section class="results-section">
+            <div class="results-section-heading">
+                <h3>Vector Similarity Recommendations</h3>
+                <p>Milvus search over uploaded developer expertise embeddings.</p>
+            </div>
+            ${recommendations.length ? `<div class="result-list">${cards}</div>` : "<p class=\"results-note\">No vector recommendations available. Upload expertise data first.</p>"}
+        </section>
+    `;
+
+    const modelItems = modelRecommendations.length
+        ? `
+            <ul>
+                ${modelRecommendations.map((item, index) => `
+                    <li>
+                        <span>${index + 1}. ${escapeHtml(item.developer_name)}</span>
+                        <span>${Number(item.model_score).toFixed(4)}</span>
+                    </li>
+                `).join("")}
+            </ul>
+        `
+        : `<p class="results-note">${classifierEnabled ? "No model recommendations were returned for this query." : "No fine-tuned checkpoint is active yet. Upload a bug dataset to train one."}</p>`;
+
+    const modelBlock = `
+        <section class="classifier-block">
+            <div class="results-section-heading">
+                <h3>Fine-Tuned Model Recommendations</h3>
+                <p>Predictions from the active checkpoint: ${escapeHtml(activeCheckpoint)}</p>
+            </div>
+            ${modelItems}
+        </section>
+    `;
 
     recommendOutput.className = "results";
     recommendOutput.innerHTML = `
@@ -409,13 +610,13 @@ function renderRecommendations(data) {
             <h3>Combined Query</h3>
             <pre>${escapeHtml(data.query_text)}</pre>
         </div>
-        <div class="result-list">${cards}</div>
-        ${"" /* classifierBlock */}
+        ${vectorBlock}
+        ${modelBlock}
     `;
 }
 
 function escapeHtml(value) {
-    return value
+    return String(value ?? "")
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
