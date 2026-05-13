@@ -569,7 +569,7 @@ function renderRecommendations(data) {
         return;
     }
 
-    const cards = recommendations.map((item, index) => `
+    const vectorCards = recommendations.map((item, index) => `
         <article class="result-card">
             <div class="result-rank">${index + 1}</div>
             <div class="result-body">
@@ -578,8 +578,6 @@ function renderRecommendations(data) {
                     <span>Similarity ${Number(item.similarity_score).toFixed(4)}</span>
                 </div>
                 <p><strong>Final score:</strong> ${Number(item.final_score).toFixed(4)}</p>
-                ${"" /* item.classifier_score !== null && item.classifier_score !== undefined ? `<p><strong>Classifier score:</strong> ${Number(item.classifier_score).toFixed(4)}</p>` : "" */}
-                ${item.matched_bug_text ? `<p class="matched-text">${escapeHtml(item.matched_bug_text)}</p>` : ""}
             </div>
         </article>
     `).join("");
@@ -590,30 +588,36 @@ function renderRecommendations(data) {
                 <h3>Vector Similarity Recommendations</h3>
                 <p>Milvus search over uploaded developer expertise embeddings.</p>
             </div>
-            ${recommendations.length ? `<div class="result-list">${cards}</div>` : "<p class=\"results-note\">No vector recommendations available. Upload expertise data first.</p>"}
+            ${recommendations.length ? `<div class="result-list">${vectorCards}</div>` : "<p class=\"results-note\">No vector recommendations available. Upload expertise data first.</p>"}
         </section>
     `;
 
-    const modelItems = modelRecommendations.length
-        ? `
-            <ul>
-                ${modelRecommendations.map((item, index) => `
-                    <li>
-                        <span>${index + 1}. ${escapeHtml(item.developer_name)}</span>
-                        <span>${Number(item.model_score).toFixed(4)}</span>
-                    </li>
-                `).join("")}
-            </ul>
-        `
-        : `<p class="results-note">${classifierEnabled ? "No model recommendations were returned for this query." : "No fine-tuned checkpoint is active yet. Upload a bug dataset to train one."}</p>`;
+    const modelCards = modelRecommendations.map((item, index) => {
+        const rawScore = Number(item.model_score);
+        const percentScore = rawScore * 100;
+
+        return `
+            <article class="result-card">
+                <div class="result-rank">${index + 1}</div>
+                <div class="result-body">
+                    <div class="result-header">
+                        <h3>${escapeHtml(item.developer_name)}</h3>
+                        <span>Confidence ${rawScore.toFixed(6)}</span>
+                    </div>
+                    <p><strong>Prediction accuracy score:</strong> ${percentScore.toFixed(3)}%</p>
+                    <p><strong>Raw model probability:</strong> ${rawScore.toFixed(6)}</p>
+                </div>
+            </article>
+        `;
+    }).join("");
 
     const modelBlock = `
-        <section class="classifier-block">
+        <section class="results-section classifier-block">
             <div class="results-section-heading">
                 <h3>Fine-Tuned Model Recommendations</h3>
                 <p>Predictions from the active checkpoint: ${escapeHtml(activeCheckpoint)}</p>
             </div>
-            ${modelItems}
+            ${modelRecommendations.length ? `<div class="result-list">${modelCards}</div>` : `<p class="results-note">${classifierEnabled ? "No model recommendations were returned for this query." : "No fine-tuned checkpoint is active yet. Upload a bug dataset to train one."}</p>`}
         </section>
     `;
 
