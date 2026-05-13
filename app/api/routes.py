@@ -289,6 +289,48 @@ def _process_upload_job(
         },
     )
 
+    try:
+        result = service.upload_expertise(
+            records,
+            progress_callback=lambda phase, percent, message: _set_upload_job(
+                request,
+                job_id,
+                {
+                    "status": "running",
+                    "phase": phase,
+                    "progress_percent": round(percent, 2),
+                    "message": message,
+                },
+            ),
+        )
+    except Exception as exc:
+        _set_upload_job(
+            request,
+            job_id,
+            {
+                "status": "failed",
+                "phase": "failed",
+                "progress_percent": 100.0,
+                "message": "Expertise upload failed.",
+                "error": str(exc),
+                "result": None,
+            },
+        )
+        return
+
+    _set_upload_job(
+        request,
+        job_id,
+        {
+            "status": "completed",
+            "phase": "completed",
+            "progress_percent": 100.0,
+            "message": "Expertise upload completed successfully.",
+            "result": result,
+            "error": None,
+        },
+    )
+
 
 def _process_bug_dataset_job(
     request: Request,
@@ -362,48 +404,6 @@ def _process_bug_dataset_job(
             "progress_percent": 100.0,
             "message": "Bug dataset fine-tuning completed successfully.",
             "result": typed_result.model_dump(),
-            "error": None,
-        },
-    )
-
-    try:
-        result = service.upload_expertise(
-            records,
-            progress_callback=lambda phase, percent, message: _set_upload_job(
-                request,
-                job_id,
-                {
-                    "status": "running",
-                    "phase": phase,
-                    "progress_percent": round(percent, 2),
-                    "message": message,
-                },
-            ),
-        )
-    except Exception as exc:
-        _set_upload_job(
-            request,
-            job_id,
-            {
-                "status": "failed",
-                "phase": "failed",
-                "progress_percent": 100.0,
-                "message": "Expertise upload failed.",
-                "error": str(exc),
-                "result": None,
-            },
-        )
-        return
-
-    _set_upload_job(
-        request,
-        job_id,
-        {
-            "status": "completed",
-            "phase": "completed",
-            "progress_percent": 100.0,
-            "message": "Expertise upload completed successfully.",
-            "result": result,
             "error": None,
         },
     )

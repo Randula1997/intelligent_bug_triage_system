@@ -171,6 +171,7 @@ confirmClearModal.addEventListener("click", (event) => {
 
 confirmClearButton.addEventListener("click", async () => {
     setClearButtonState(true);
+    setSectionClearBusyState(clearModalState.action, true);
     try {
         if (clearModalState.action === "bug-dataset-model") {
             await clearBugDatasetModel();
@@ -188,6 +189,7 @@ confirmClearButton.addEventListener("click", async () => {
             renderUploadMessage(error.message, true);
         }
     } finally {
+        setSectionClearBusyState(clearModalState.action, false);
         setClearButtonState(false);
     }
 });
@@ -498,8 +500,19 @@ function closeClearModal() {
 function setClearButtonState(isBusy) {
     confirmClearButton.disabled = isBusy;
     cancelClearButton.disabled = isBusy;
-    clearOrganizationDataButton.disabled = isBusy || uploadUiState.isBusy || !uploadUiState.hasData;
-    clearBugDatasetButton.disabled = isBusy || bugDatasetUiState.isBusy || !bugDatasetUiState.hasCheckpoint;
+}
+
+function setSectionClearBusyState(action, isBusy) {
+    if (action === "bug-dataset-model") {
+        bugDatasetUiState.isBusy = isBusy;
+        syncBugDatasetControls();
+        return;
+    }
+
+    if (action === "developer-expertise-data") {
+        uploadUiState.isBusy = isBusy;
+        syncUploadControls();
+    }
 }
 
 function openClearModal({ action, title, description, confirmLabel }) {
