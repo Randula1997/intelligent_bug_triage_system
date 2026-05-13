@@ -559,65 +559,31 @@ async function clearBugDatasetModel() {
 
 function renderRecommendations(data) {
     const recommendations = data.recommendations || [];
-    const modelRecommendations = data.model_recommendations || [];
-    const classifierEnabled = Boolean(data.classifier_enabled);
-    const activeCheckpoint = data.active_model_checkpoint || "No fine-tuned checkpoint active";
 
-    if (!recommendations.length && !modelRecommendations.length) {
+    if (!recommendations.length) {
         recommendOutput.className = "results empty";
-        recommendOutput.innerHTML = "<p>No recommendations found. Upload expertise data and fine-tune a bug dataset first.</p>";
+        recommendOutput.innerHTML = "<p>No recommendations found yet. Upload the datasets and try again.</p>";
         return;
     }
 
-    const vectorCards = recommendations.map((item, index) => `
+    const recommendationCards = recommendations.map((item, index) => `
         <article class="result-card">
             <div class="result-rank">${index + 1}</div>
             <div class="result-body">
                 <div class="result-header">
                     <h3>${escapeHtml(item.developer_name)}</h3>
-                    <span>Similarity ${Number(item.similarity_score).toFixed(4)}</span>
                 </div>
-                <p><strong>Final score:</strong> ${Number(item.final_score).toFixed(4)}</p>
             </div>
         </article>
     `).join("");
 
-    const vectorBlock = `
+    const combinedBlock = `
         <section class="results-section">
             <div class="results-section-heading">
-                <h3>Vector Similarity Recommendations</h3>
-                <p>Milvus search over uploaded developer expertise embeddings.</p>
+                <h3>Developer Recommendations</h3>
+                <p>These recommendations are shown as the combined result from both recommendation approaches.</p>
             </div>
-            ${recommendations.length ? `<div class="result-list">${vectorCards}</div>` : "<p class=\"results-note\">No vector recommendations available. Upload expertise data first.</p>"}
-        </section>
-    `;
-
-    const modelCards = modelRecommendations.map((item, index) => {
-        const rawScore = Number(item.model_score);
-        const percentScore = rawScore * 100;
-
-        return `
-            <article class="result-card">
-                <div class="result-rank">${index + 1}</div>
-                <div class="result-body">
-                    <div class="result-header">
-                        <h3>${escapeHtml(item.developer_name)}</h3>
-                        <span>Confidence ${rawScore.toFixed(6)}</span>
-                    </div>
-                    <p><strong>Prediction accuracy score:</strong> ${percentScore.toFixed(3)}%</p>
-                    <p><strong>Raw model probability:</strong> ${rawScore.toFixed(6)}</p>
-                </div>
-            </article>
-        `;
-    }).join("");
-
-    const modelBlock = `
-        <section class="results-section classifier-block">
-            <div class="results-section-heading">
-                <h3>Fine-Tuned Model Recommendations</h3>
-                <p>Predictions from the active checkpoint: ${escapeHtml(activeCheckpoint)}</p>
-            </div>
-            ${modelRecommendations.length ? `<div class="result-list">${modelCards}</div>` : `<p class="results-note">${classifierEnabled ? "No model recommendations were returned for this query." : "No fine-tuned checkpoint is active yet. Upload a bug dataset to train one."}</p>`}
+            ${recommendations.length ? `<div class="result-list">${recommendationCards}</div>` : "<p class=\"results-note\">No recommendations available.</p>"}
         </section>
     `;
 
@@ -627,8 +593,7 @@ function renderRecommendations(data) {
             <h3>Combined Query</h3>
             <pre>${escapeHtml(data.query_text)}</pre>
         </div>
-        ${vectorBlock}
-        ${modelBlock}
+        ${combinedBlock}
     `;
 }
 
