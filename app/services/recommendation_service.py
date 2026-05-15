@@ -5,14 +5,13 @@ from collections.abc import Callable, Iterable
 from app.core.config import Settings
 from app.db.milvus import MilvusRepository
 from app.models.schemas import BugDatasetRecord
+from app.models.schemas import ExpertiseBugHistoryItem
 from app.models.schemas import ExpertiseRecord
 from app.services.classification_service import ClassificationService
 from app.services.embedding_service import EmbeddingService
 
 
 class RecommendationService:
-    upload_batch_size = 32
-
     def __init__(
         self,
         *,
@@ -48,8 +47,12 @@ class RecommendationService:
 
         for record in records:
             for history_text in self._extract_record_texts(record):
-                developer_names.append(record.developer_name)
-                original_texts.append(history_text)
+                for chunk_text in self.embedding_service.chunk_text(
+                    history_text,
+                    self.settings.expertise_chunk_size_tokens,
+                ):
+                    developer_names.append(record.developer_name)
+                    original_texts.append(chunk_text)
 
         if not original_texts:
             raise ValueError("No bug history text was found in the uploaded dataset.")
@@ -75,8 +78,10 @@ class RecommendationService:
                 f"Validated dataset. Preparing {total_records} expertise records. Skipped {skipped_records} records.",
             )
 
-        for start_index in range(0, total_records, self.upload_batch_size):
-            end_index = min(start_index + self.upload_batch_size, total_records)
+        batch_size = self.settings.expertise_upload_batch_size
+
+        for start_index in range(0, total_records, batch_size):
+            end_index = min(start_index + batch_size, total_records)
             batch_names = developer_names[start_index:end_index]
             batch_texts = original_texts[start_index:end_index]
 
@@ -98,6 +103,8 @@ class RecommendationService:
                     55 + (completed_ratio * 40),
                     f"Stored {end_index} of {total_records} vectors in Milvus.",
                 )
+
+        self.milvus_repository.finalize_writes()
 
         if progress_callback is not None:
             progress_callback("finalizing", 98, "Finalizing upload results.")
@@ -161,7 +168,7 @@ class RecommendationService:
         return f"Title: {bug_title.strip()}\nDescription: {bug_description.strip()}"
 
     @staticmethod
-    def _expand_history(bug_history: str | list[str]) -> Iterable[str]:
+    def _expand_history(bug_history: str | list[str | ExpertiseBugHistoryItem]) -> Iterable[str]:
         if isinstance(bug_history, str):
             text = bug_history.strip()
             if text:
@@ -169,9 +176,15 @@ class RecommendationService:
             return
 
         for item in bug_history:
-            text = item.strip()
-            if text:
-                yield text
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    yield text
+                continue
+
+            combined_text = RecommendationService._combine_query_text(item.title, item.description)
+            if combined_text.strip():
+                yield combined_text
 
     @staticmethod
     def _extract_record_texts(record: ExpertiseRecord | BugDatasetRecord) -> Iterable[str]:

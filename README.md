@@ -44,18 +44,34 @@ Send a dataset where each record contains:
 ```json
 {
   "developer_name": "alice",
-  "bug_history": "Crash on workspace reload after extension activation"
+  "bug_history": [
+    {
+      "title": "Workspace reload crash",
+      "description": "Crash on workspace reload after extension activation"
+    },
+    {
+      "title": "Search panel deadlock",
+      "description": "Search panel deadlocks when workspace cache is rebuilt"
+    }
+  ]
 }
 ```
 
-`bug_history` can also be a list of strings if a developer has multiple historical bug records in one row.
+`bug_history` can be:
+
+- A list of `{ "title", "description" }` objects. This is the recommended format for best retrieval accuracy.
+- A list of strings for legacy datasets.
+- A single string for legacy datasets.
+
+For CSV uploads, the `bug_history` column can still contain plain text, or it can contain a JSON array or JSON object string using the same structured format shown above.
 
 The backend will:
 
 1. Parse the uploaded JSON, JSONL, or CSV file.
-2. Expand each `bug_history` item into a searchable record.
-3. Generate normalized embeddings with the configured SentenceTransformer model.
-4. Insert vectors and metadata into Milvus.
+2. Normalize each structured bug history item into the text format `Title: <title>\nDescription: <description>`.
+3. Expand each normalized `bug_history` item into a searchable record.
+4. Generate normalized embeddings with the configured SentenceTransformer model.
+5. Insert vectors and metadata into Milvus.
 
 Stored metadata includes:
 
@@ -468,13 +484,24 @@ The first dataset upload creates the `developer_expertise` collection automatica
   {
     "developer_name": "alice",
     "bug_history": [
-      "Crash on workspace reload after extension activation.",
-      "Search panel deadlocks when workspace cache is rebuilt."
+      {
+        "title": "Workspace reload crash",
+        "description": "Crash on workspace reload after extension activation."
+      },
+      {
+        "title": "Search panel deadlock",
+        "description": "Search panel deadlocks when workspace cache is rebuilt."
+      }
     ]
   },
   {
     "developer_name": "maria",
-    "bug_history": "File watcher leaks handles when large monorepos are reopened."
+    "bug_history": [
+      {
+        "title": "File watcher handle leak",
+        "description": "File watcher leaks handles when large monorepos are reopened."
+      }
+    ]
   }
 ]
 ```

@@ -1,11 +1,25 @@
+import json
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
 
+class ExpertiseBugHistoryItem(BaseModel):
+    title: str = Field(..., min_length=1)
+    description: str = Field(..., min_length=1)
+
+    @field_validator("title", "description")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("field cannot be empty")
+        return cleaned
+
+
 class ExpertiseRecord(BaseModel):
     developer_name: str = Field(..., min_length=1)
-    bug_history: str | list[str]
+    bug_history: str | list[str | ExpertiseBugHistoryItem]
 
     @field_validator("developer_name")
     @classmethod
@@ -14,6 +28,30 @@ class ExpertiseRecord(BaseModel):
         if not cleaned:
             raise ValueError("developer_name cannot be empty")
         return cleaned
+
+    @field_validator("bug_history", mode="before")
+    @classmethod
+    def parse_bug_history_json(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+
+        cleaned = value.strip()
+        if not cleaned:
+            return value
+
+        if cleaned.startswith("["):
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError as exc:
+                raise ValueError("bug_history must be valid JSON when provided as an array string") from exc
+
+        if cleaned.startswith("{"):
+            try:
+                return [json.loads(cleaned)]
+            except json.JSONDecodeError as exc:
+                raise ValueError("bug_history must be valid JSON when provided as an object string") from exc
+
+        return value
 
 
 class BugDatasetRecord(BaseModel):

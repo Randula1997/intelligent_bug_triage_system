@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import sys
 from pathlib import Path
 from typing import TypeVar
 from uuid import uuid4
@@ -28,6 +29,20 @@ from app.models.schemas import (
 
 router = APIRouter()
 RecordModelT = TypeVar("RecordModelT", bound=BaseModel)
+
+
+def _ensure_csv_field_size_limit() -> None:
+    limit = sys.maxsize
+
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            return
+        except OverflowError:
+            limit //= 10
+
+        if limit <= 0:
+            raise RuntimeError("Could not configure the CSV field size limit.")
 
 
 def _set_upload_job(request: Request, job_id: str, payload: dict[str, object]) -> None:
@@ -227,6 +242,7 @@ async def _parse_typed_dataset(file: UploadFile, model_type: type[RecordModelT])
             return _validate_typed_records(parsed_lines, model_type)
 
         if suffix == ".csv":
+            _ensure_csv_field_size_limit()
             reader = csv.DictReader(io.StringIO(decoded))
             rows = [row for row in reader if not _is_empty_row(row)]
             return _validate_typed_records(rows, model_type)

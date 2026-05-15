@@ -138,12 +138,23 @@ class MilvusRepository:
                     f"which exceeds the current Milvus collection limit of {self.original_text_max_length}."
                 )
 
-    def insert(self, developer_names: list[str], original_texts: list[str], embeddings: list[list[float]]) -> int:
+    def insert(
+        self,
+        developer_names: list[str],
+        original_texts: list[str],
+        embeddings: list[list[float]],
+        *,
+        flush: bool = False,
+    ) -> int:
         self._validate_string_lengths(developer_names, original_texts)
         insert_result = self.collection.insert([developer_names, original_texts, embeddings])
+        if flush:
+            self.finalize_writes()
+        return len(insert_result.primary_keys)
+
+    def finalize_writes(self) -> None:
         self.collection.flush()
         self.collection.load()
-        return len(insert_result.primary_keys)
 
     def clear(self) -> int:
         existing_count = self.count()

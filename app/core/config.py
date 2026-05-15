@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     milvus_index_type: str = "FLAT"
     milvus_metric_type: str = "IP"
     search_limit_multiplier: int = 5
+    expertise_upload_batch_size: int = Field(default=256, ge=16, le=2048)
+    expertise_chunk_size_tokens: int = Field(default=384, ge=32, le=4096)
     # hybrid_alpha: float = 0.7
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
