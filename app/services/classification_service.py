@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
+import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -15,6 +17,7 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    DataCollatorWithPadding,
     PreTrainedTokenizerBase,
     get_linear_schedule_with_warmup,
 )
@@ -70,6 +73,9 @@ class ClassificationService:
         learning_rate: float,
         batch_size: int,
         max_length: int,
+        gradient_accumulation_steps: int,
+        early_stopping_patience: int,
+        mixed_precision_enabled: bool,
     ) -> None:
         self.base_checkpoint_path = Path(base_checkpoint_path)
         self.finetuned_root_path = Path(finetuned_root_path)
@@ -77,6 +83,9 @@ class ClassificationService:
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.max_length = max_length
+        self.gradient_accumulation_steps = max(1, gradient_accumulation_steps)
+        self.early_stopping_patience = max(1, early_stopping_patience)
+        self.mixed_precision_enabled = mixed_precision_enabled
         self.enabled = False
         self.tokenizer: PreTrainedTokenizerBase | None = None
         self.model = None
@@ -183,10 +192,14 @@ class ClassificationService:
         encodings = tokenizer(
             texts,
             truncation=True,
-            padding=True,
+            padding=False,
             max_length=self.max_length,
         )
         dataset = _TokenizedBugDataset(encodings, labels)
+        collator = DataCollatorWithPadding(
+            tokenizer=tokenizer,
+            pad_to_multiple_of=8 if self.device.type == "cuda" else None,
+        )
 
         if progress_callback is not None:
             progress_callback("tokenizing", 15, "Tokenized bug reports for fine-tuning.")
@@ -199,12 +212,16 @@ class ClassificationService:
             train_dataset,
             batch_size=min(self.batch_size, len(train_dataset)),
             shuffle=True,
+            collate_fn=collator,
+            pin_memory=self.device.type == "cuda",
         )
         validation_loader = (
             DataLoader(
                 validation_dataset,
                 batch_size=min(self.batch_size, len(validation_dataset)),
                 shuffle=False,
+                collate_fn=collator,
+                pin_memory=self.device.type == "cuda",
             )
             if validation_dataset is not None
             else None
@@ -221,8 +238,11 @@ class ClassificationService:
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.learning_rate, weight_decay=0.01)
 
         class_weights = self._compute_class_weights(labels, len(label_to_id)).to(self.device)
+        amp_enabled, amp_dtype, use_grad_scaler = self._get_amp_settings()
+        scaler = torch.amp.GradScaler("cuda", enabled=use_grad_scaler)
 
-        total_steps = max(len(train_loader) * self.train_epochs, 1)
+        steps_per_epoch = max(math.ceil(len(train_loader) / self.gradient_accumulation_steps), 1)
+        total_steps = max(steps_per_epoch * self.train_epochs, 1)
         warmup_steps = max(total_steps // 10, 1)
         scheduler = get_linear_schedule_with_warmup(
             optimizer,
@@ -230,56 +250,90 @@ class ClassificationService:
             num_training_steps=total_steps,
         )
         completed_steps = 0
-        best_state_dict = None
         best_epoch = 0
         best_metric = float("-inf")
         best_validation_accuracy: float | None = None
         best_validation_loss: float | None = None
+        stopped_early = False
+        patience_counter = 0
+        best_model_state_path: Path | None = None
 
-        for epoch_index in range(self.train_epochs):
-            model.train()
-            epoch_loss_total = 0.0
-            for batch in train_loader:
-                optimizer.zero_grad()
-                prepared_batch = {key: value.to(self.device) for key, value in batch.items()}
-                labels_tensor = prepared_batch.pop("labels")
-                outputs = model(**prepared_batch)
-                loss = F.cross_entropy(outputs.logits, labels_tensor, weight=class_weights)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-                scheduler.step()
-                completed_steps += 1
-                epoch_loss_total += float(loss.item())
+        with tempfile.TemporaryDirectory(prefix="classifier-best-", dir=str(self.finetuned_root_path)) as tmp_dir:
+            best_model_state_path = Path(tmp_dir) / "best-model-state.pt"
+            for epoch_index in range(self.train_epochs):
+                model.train()
+                epoch_loss_total = 0.0
+                optimizer.zero_grad(set_to_none=True)
 
-                if progress_callback is not None:
-                    progress_callback(
-                        "training",
-                        15 + ((completed_steps / total_steps) * 70),
-                        f"Fine-tuning epoch {epoch_index + 1} of {self.train_epochs}.",
+                for batch_index, batch in enumerate(train_loader, start=1):
+                    prepared_batch = {key: value.to(self.device) for key, value in batch.items()}
+                    labels_tensor = prepared_batch.pop("labels")
+
+                    with torch.autocast(
+                        device_type=self.device.type,
+                        dtype=amp_dtype,
+                        enabled=amp_enabled,
+                    ):
+                        outputs = model(**prepared_batch)
+                        raw_loss = F.cross_entropy(outputs.logits, labels_tensor, weight=class_weights)
+
+                    loss = raw_loss / self.gradient_accumulation_steps
+                    epoch_loss_total += float(raw_loss.item())
+
+                    if scaler.is_enabled():
+                        scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
+
+                    should_step = (
+                        batch_index % self.gradient_accumulation_steps == 0
+                        or batch_index == len(train_loader)
                     )
+                    if should_step:
+                        if scaler.is_enabled():
+                            scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                        if scaler.is_enabled():
+                            scaler.step(optimizer)
+                            scaler.update()
+                        else:
+                            optimizer.step()
+                        scheduler.step()
+                        optimizer.zero_grad(set_to_none=True)
+                        completed_steps += 1
 
-            average_train_loss = epoch_loss_total / max(len(train_loader), 1)
-            validation_metrics = self._evaluate(model, validation_loader, class_weights)
-            epoch_score = (
-                validation_metrics["accuracy"]
-                if validation_metrics is not None
-                else -average_train_loss
-            )
+                        if progress_callback is not None:
+                            progress_callback(
+                                "training",
+                                15 + ((completed_steps / total_steps) * 70),
+                                f"Fine-tuning epoch {epoch_index + 1} of {self.train_epochs}.",
+                            )
 
-            if epoch_score > best_metric:
-                best_metric = epoch_score
-                best_epoch = epoch_index + 1
-                best_state_dict = {
-                    key: value.detach().cpu().clone()
-                    for key, value in model.state_dict().items()
-                }
-                if validation_metrics is not None:
-                    best_validation_accuracy = float(validation_metrics["accuracy"])
-                    best_validation_loss = float(validation_metrics["loss"])
+                average_train_loss = epoch_loss_total / max(len(train_loader), 1)
+                validation_metrics = self._evaluate(model, validation_loader, class_weights)
+                epoch_score = (
+                    validation_metrics["accuracy"]
+                    if validation_metrics is not None
+                    else -average_train_loss
+                )
 
-        if best_state_dict is not None:
-            model.load_state_dict(best_state_dict)
+                if epoch_score > best_metric:
+                    best_metric = epoch_score
+                    best_epoch = epoch_index + 1
+                    patience_counter = 0
+                    torch.save(model.state_dict(), best_model_state_path)
+                    if validation_metrics is not None:
+                        best_validation_accuracy = float(validation_metrics["accuracy"])
+                        best_validation_loss = float(validation_metrics["loss"])
+                else:
+                    patience_counter += 1
+                    if patience_counter >= self.early_stopping_patience:
+                        stopped_early = True
+                        break
+
+            if best_model_state_path.exists():
+                best_state_dict = torch.load(best_model_state_path, map_location=self.device)
+                model.load_state_dict(best_state_dict)
 
         output_dir = self._build_output_dir(source_name)
         output_dir.mkdir(parents=True, exist_ok=False)
@@ -297,7 +351,13 @@ class ClassificationService:
             "epochs": self.train_epochs,
             "learning_rate": self.learning_rate,
             "batch_size": self.batch_size,
+            "gradient_accumulation_steps": self.gradient_accumulation_steps,
+            "effective_batch_size": self.batch_size * self.gradient_accumulation_steps,
             "max_length": self.max_length,
+            "mixed_precision_enabled": amp_enabled,
+            "mixed_precision_dtype": str(amp_dtype).replace("torch.", "") if amp_enabled else None,
+            "early_stopping_patience": self.early_stopping_patience,
+            "stopped_early": stopped_early,
             "trained_records": len(records),
             "developer_count": len(developer_names),
             "training_records": len(train_indices),
@@ -454,13 +514,19 @@ class ClassificationService:
         total_loss = 0.0
         total_examples = 0
         total_correct = 0
+        amp_enabled, amp_dtype, _ = self._get_amp_settings()
 
         with torch.no_grad():
             for batch in data_loader:
                 prepared_batch = {key: value.to(self.device) for key, value in batch.items()}
                 labels_tensor = prepared_batch.pop("labels")
-                outputs = model(**prepared_batch)
-                loss = F.cross_entropy(outputs.logits, labels_tensor, weight=class_weights)
+                with torch.autocast(
+                    device_type=self.device.type,
+                    dtype=amp_dtype,
+                    enabled=amp_enabled,
+                ):
+                    outputs = model(**prepared_batch)
+                    loss = F.cross_entropy(outputs.logits, labels_tensor, weight=class_weights)
                 predictions = torch.argmax(outputs.logits, dim=-1)
 
                 batch_size = int(labels_tensor.shape[0])
@@ -499,6 +565,15 @@ class ClassificationService:
         current_version = _parse_version(self.torch_version)
         padded_current = current_version + (0,) * max(0, len(minimum_version) - len(current_version))
         return padded_current >= minimum_version
+
+    def _get_amp_settings(self) -> tuple[bool, torch.dtype, bool]:
+        if self.device.type != "cuda" or not self.mixed_precision_enabled:
+            return False, torch.float32, False
+
+        if torch.cuda.is_bf16_supported():
+            return True, torch.bfloat16, False
+
+        return True, torch.float16, True
 
     @staticmethod
     def _combine_bug_text(record: BugDatasetRecord) -> str:

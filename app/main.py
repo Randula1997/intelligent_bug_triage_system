@@ -38,6 +38,9 @@ async def lifespan(app: FastAPI):
             learning_rate=settings.classifier_learning_rate,
             batch_size=settings.classifier_batch_size,
             max_length=settings.classifier_max_length,
+            gradient_accumulation_steps=settings.classifier_gradient_accumulation_steps,
+            early_stopping_patience=settings.classifier_early_stopping_patience,
+            mixed_precision_enabled=settings.classifier_mixed_precision_enabled,
         )
         milvus_repository = MilvusRepository(
             uri=settings.milvus_uri,

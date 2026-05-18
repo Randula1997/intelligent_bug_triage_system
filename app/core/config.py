@@ -11,10 +11,13 @@ class Settings(BaseSettings):
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     classifier_base_checkpoint_path: str = Field(default="./checkpoints/model-checkpoint")
     classifier_finetuned_root: str = Field(default="./checkpoints/finetuned-models")
-    classifier_train_epochs: int = Field(default=5, ge=1, le=20)
+    classifier_train_epochs: int = Field(default=3, ge=1, le=20)
     classifier_learning_rate: float = Field(default=3e-5, gt=0)
-    classifier_batch_size: int = Field(default=8, ge=1, le=128)
-    classifier_max_length: int = Field(default=384, ge=32, le=1024)
+    classifier_batch_size: int = Field(default=4, ge=1, le=128)
+    classifier_max_length: int = Field(default=256, ge=32, le=1024)
+    classifier_gradient_accumulation_steps: int = Field(default=2, ge=1, le=64)
+    classifier_early_stopping_patience: int = Field(default=2, ge=1, le=10)
+    classifier_mixed_precision_enabled: bool = True
     milvus_uri: str = Field(default="http://127.0.0.1:19530")
     milvus_token: str | None = None
     milvus_collection_name: str = "developer_expertise"

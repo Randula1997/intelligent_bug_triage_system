@@ -111,10 +111,21 @@ The backend will:
 
 1. Parse the uploaded JSON, JSONL, or CSV file.
 2. Use the base checkpoint from `checkpoints/model-checkpoint` as the fine-tuning starting point.
-3. Train a new sequence-classification model on the uploaded company dataset.
+3. Train a new sequence-classification model on the uploaded company dataset using dynamic batch padding, gradient accumulation, mixed precision on CUDA, and early stopping.
 4. Save the new checkpoint under `checkpoints/finetuned-models/<timestamp>-<dataset-name>`.
 5. Keep the original base checkpoint unchanged so it can be reused for a different dataset later.
 6. Activate the newly saved checkpoint for model-based recommendations.
+
+Default fine-tuning settings are tuned to reduce GPU or system memory pressure on larger bug datasets:
+
+- `classifier_train_epochs=3`
+- `classifier_batch_size=4`
+- `classifier_gradient_accumulation_steps=2` for an effective batch size of 8
+- `classifier_max_length=256`
+- `classifier_early_stopping_patience=2`
+- `classifier_mixed_precision_enabled=true` to use `bf16` or `fp16` automatically on CUDA
+
+You can override these values in `.env` if your hardware can handle larger batches or longer inputs.
 
 ## Setup
 
